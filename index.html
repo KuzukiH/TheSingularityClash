@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>The Singularity Core: Execution Protocol</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            touch-action: none;
+            user-select: none;
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+        }
+        canvas {
+            background: #000;
+            touch-action: none;
+            image-rendering: pixelated;
+        }
+        .ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 50;
+        }
+        .modal {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            text-align: center;
+            pointer-events: auto;
+        }
+        .hud-top {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .stat-box {
+            background: rgba(0,0,0,0.8);
+            border-left: 4px solid #0ff;
+            padding: 8px 15px;
+            backdrop-filter: blur(5px);
+        }
+        .life-heart {
+            display: inline-block;
+            width: 15px;
+            height: 15px;
+            background: #ff0055;
+            margin-right: 5px;
+            clip-path: polygon(50% 0%, 100% 35%, 80% 100%, 50% 80%, 20% 100%, 0% 35%);
+        }
+        .dead-heart {
+            background: #333;
+        }
+        /* Touch UI */
+        #mobile-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 10px;
+            right: 10px;
+            display: none;
+            justify-content: space-between;
+            align-items: flex-end;
+            pointer-events: none;
+        }
+        .joystick-container {
+            width: 140px;
+            height: 140px;
+            background: rgba(255,255,255,0.05);
+            border: 2px solid rgba(255,255,255,0.1);
+            border-radius: 50%;
+            position: relative;
+            pointer-events: auto;
+        }
+        .joystick-knob {
+            width: 50px;
+            height: 50px;
+            background: #0ff;
+            border-radius: 50%;
+            position: absolute;
+            top: 45px;
+            left: 45px;
+            opacity: 0.6;
+        }
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 70px);
+            gap: 10px;
+            pointer-events: auto;
+        }
+        .btn-action {
+            width: 70px;
+            height: 70px;
+            background: rgba(0, 255, 255, 0.1);
+            border: 2px solid #0ff;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 10px;
+            font-weight: bold;
+            color: #fff;
+        }
+        .btn-action:active { transform: scale(0.9); background: #0ff; color: #000; }
+        .btn-special { border-color: #a855f7; background: rgba(168, 85, 247, 0.1); }
+        
+        .cooldown-overlay {
+            position: absolute;
+            bottom: 0; left: 0; width: 100%; height: 0%;
+            background: rgba(0,0,0,0.6);
+            transition: height 0.1s linear;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="ui-layer">
+        <div class="hud-top">
+            <div class="stat-box">
+                <h1 id="floor-text" class="text-cyan-400 font-bold text-lg">FLOOR 1: STABLE</h1>
+                <div id="lives-container" class="my-1"></div>
+                <div class="w-48 h-3 bg-gray-900 border border-gray-700 relative overflow-hidden">
+                    <div id="hp-bar" class="h-full bg-red-600 transition-all duration-200" style="width: 100%"></div>
+                </div>
+                <div id="node-progress" class="text-[10px] text-gray-400 mt-1 uppercase tracking-tighter">NODES: 0 / 3</div>
+            </div>
+            
+            <div class="stat-box border-purple-500">
+                <div id="tac-status" class="text-xs font-bold text-purple-400">TAC READY [SHIFT]</div>
+                <div class="w-32 h-1 bg-gray-900 mt-1">
+                    <div id="tac-bar" class="h-full bg-purple-500" style="width: 100%"></div>
+                </div>
+                <div id="dash-status" class="text-[9px] text-gray-500 mt-2">DASH CHARGES: 3/3</div>
+            </div>
+        </div>
+
+        <!-- Mobile Controls -->
+        <div id="mobile-controls">
+            <div class="joystick-container" id="joy-base">
+                <div class="joystick-knob" id="joy-knob"></div>
+            </div>
+            <div class="action-grid">
+                <div class="btn-action relative overflow-hidden" id="m-slash">
+                    SLASH
+                    <div id="cd-slash" class="cooldown-overlay"></div>
+                </div>
+                <div class="btn-action relative overflow-hidden" id="m-dash">
+                    DASH
+                    <div id="cd-dash" class="cooldown-overlay"></div>
+                </div>
+                <div class="btn-action btn-special relative overflow-hidden" id="m-tac">
+                    TAC
+                    <div id="cd-tac" class="cooldown-overlay"></div>
+                </div>
+                <div class="btn-action btn-special" id="m-blitz">BLITZ</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="death-screen" class="modal">
+        <h2 class="text-6xl font-black text-red-600 italic mb-2">SYSTEM HALT</h2>
+        <p class="text-gray-400 font-mono tracking-widest mb-10">CORE INTEGRITY ZERO</p>
+        <button onclick="location.reload()" class="px-10 py-4 bg-red-900 border-2 border-white font-bold hover:bg-red-700 transition-colors">RE-SYNC DNA</button>
+    </div>
+
+    <div id="settings-modal" class="modal">
+        <h2 class="text-4xl font-bold text-cyan-400 mb-8">CONFIG</h2>
+        <div class="w-72 space-y-6">
+            <div class="flex justify-between items-center">
+                <span>SIMULATION SPEED</span>
+                <select id="set-diff" class="bg-black border border-cyan-800 text-xs p-2">
+                    <option value="1">STANDARD</option>
+                    <option value="1.5">OVERLOAD</option>
+                    <option value="2.5">SINGULARITY</option>
+                </select>
+            </div>
+            <button onclick="closeSettings()" class="w-full py-3 bg-cyan-700 font-bold">COMMIT CHANGES</button>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * THE SINGULARITY CORE: Execution Protocol
+ * High-performance melee combat with management elements.
+ */
+
+// --- AUDIO FALLBACKS ---
+const audioHurt = new Audio(); // Placeholder for 'hitHurt.wav'
+const audioOST = new Audio();  // Placeholder for 'ExecuteTheWorld.wav'
+audioOST.loop = true;
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// --- GAME CONSTANTS ---
+const GAME_WIDTH = 1000;
+const GAME_HEIGHT = 700;
+let isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+// --- STATE ---
+const state = {
+    active: true,
+    floor: 1,
+    difficulty: 1,
+    tacActive: false,
+    tacCharge: 100,
+    tacDuration: 0,
+    lives: 3,
+    nodesCollected: 0,
+    nodesNeeded: 3,
+    isBossFloor: false,
+    shake: 0
+};
+
+const player = {
+    x: 100, y: 350,
+    r: 12,
+    hp: 100,
+    speed: 5,
+    dashCharges: 3,
+    dashMax: 3,
+    dashCD: 0,
+    invul: 0,
+    dashForce: 0,
+    dashDir: {x:0,y:0},
+    
+    // Combat
+    slashCD: 0,
+    slashActive: 0,
+    slashType: 'normal', // normal, hyper, blitz, whirl
+    angle: 0,
+    hyperArmor: false,
+    
+    // Input buffers
+    lastX: 1, lastY: 0
+};
+
+let enemies = [];
+let bullets = [];
+let particles = [];
+let walls = [];
+let nodes = [];
+
+// --- INPUTS ---
+const keys = {};
+let mouse = { x: 0, y: 0, down: false };
+let joystick = { active: false, x: 0, y: 0 };
+
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    handleSpecialInputs(e.code);
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+window.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = (e.clientX - rect.left) * (GAME_WIDTH / rect.width);
+    mouse.y = (e.clientY - rect.top) * (GAME_HEIGHT / rect.height);
+});
+window.addEventListener('mousedown', () => { if(state.active) triggerSlash('normal'); });
+
+// --- SYSTEMS ---
+
+function init() {
+    if(isMobile) document.getElementById('mobile-controls').style.display = 'flex';
+    setupMobileEvents();
+    resize();
+    spawnFloor();
+    requestAnimationFrame(gameLoop);
+    updateLivesUI();
+}
+
+function resize() {
+    const container = document.getElementById('game-container');
+    const ratio = GAME_WIDTH / GAME_HEIGHT;
+    let w = container.clientWidth;
+    let h = container.clientWidth / ratio;
+    if (h > container.clientHeight) {
+        h = container.clientHeight;
+        w = h * ratio;
+    }
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    canvas.width = GAME_WIDTH;
+    canvas.height = GAME_HEIGHT;
+}
+
+function spawnFloor() {
+    state.isBossFloor = (state.floor % 5 === 0);
+    state.nodesCollected = 0;
+    state.nodesNeeded = state.isBossFloor ? 0 : 3 + Math.floor(state.floor / 2);
+    
+    enemies = [];
+    bullets = [];
+    walls = [];
+    nodes = [];
+    
+    player.x = 80;
+    player.y = GAME_HEIGHT / 2;
+    player.hp = 100;
+    
+    if (state.isBossFloor) {
+        state.lives = 3;
+        updateLivesUI();
+        spawnBoss();
+    } else {
+        generateMaze();
+        for(let i=0; i<state.nodesNeeded; i++) spawnNode();
+        let enemyCount = 3 + state.floor;
+        for(let i=0; i<enemyCount; i++) spawnEnemy();
+    }
+}
+
+function generateMaze() {
+    // Adding more walls and dead ends
+    const wallCount = 10 + state.floor;
+    for(let i=0; i<wallCount; i++) {
+        walls.push({
+            x: 200 + Math.random() * 600,
+            y: Math.random() * GAME_HEIGHT,
+            w: 20 + Math.random() * 100,
+            h: 20 + Math.random() * 100
+        });
+    }
+}
+
+function spawnNode() {
+    nodes.push({
+        x: 200 + Math.random() * 700,
+        y: 50 + Math.random() * 600,
+        active: true
+    });
+}
+
+function spawnEnemy() {
+    const types = ['STALKER', 'PINK_TRIANGLE', 'WHEEL'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    enemies.push({
+        x: 400 + Math.random() * 500,
+        y: Math.random() * GAME_HEIGHT,
+        type: type,
+        hp: 40 + (state.floor * 10),
+        maxHp: 40 + (state.floor * 10),
+        timer: 0,
+        vx: 0, vy: 0
+    });
+}
+
+function spawnBoss() {
+    enemies.push({
+        x: GAME_WIDTH/2,
+        y: GAME_HEIGHT/2,
+        type: 'UNDER_BOSS',
+        hp: 1000 + (state.floor * 200),
+        maxHp: 1000 + (state.floor * 200),
+        timer: 0,
+        phase: 0
+    });
+}
+
+// --- COMBAT LOGIC ---
+
+function handleSpecialInputs(code) {
+    if (!state.active) return;
+
+    // Shift: TAC
+    if (code === 'ShiftLeft' && state.tacCharge >= 100) {
+        state.tacActive = true;
+        state.tacDuration = 6 * 60; // 6 seconds at 60fps
+    }
+
+    // Space: Dash
+    if (code === 'Space') {
+        triggerDash();
+    }
+
+    // Combos
+    if (code === 'KeyE') {
+        const isW = keys['KeyW'], isS = keys['KeyS'], isA = keys['KeyA'], isD = keys['KeyD'];
+        
+        if (isA && !isW && !isS) triggerSlash('hyper'); // A + E
+        else if (isD && keys['Space']) triggerSlash('whirl'); // D + Dash + E (approx)
+        else triggerSlash('blitz'); // E or Blitz
+    }
+}
+
+function triggerDash() {
+    if (player.dashCharges <= 0) return;
+    
+    let dx = 0, dy = 0;
+    if (isMobile && joystick.active) {
+        dx = joystick.x; dy = joystick.y;
+    } else {
+        if (keys['KeyW']) dy -= 1;
+        if (keys['KeyS']) dy += 1;
+        if (keys['KeyA']) dx -= 1;
+        if (keys['KeyD']) dx += 1;
+    }
+    
+    if (dx === 0 && dy === 0) { dx = player.lastX; dy = player.lastY; }
+    
+    const mag = Math.sqrt(dx*dx + dy*dy);
+    player.dashDir = { x: dx/mag, y: dy/mag };
+    player.dashForce = 20;
+    player.invul = 15; // I-frames
+    player.dashCharges--;
+    spawnParticles(player.x, player.y, '#fff', 5);
+}
+
+function triggerSlash(type) {
+    if (player.slashCD > 0) return;
+    
+    player.slashType = type;
+    player.slashActive = 15;
+    
+    if (type === 'normal') {
+        player.slashCD = 20;
+    } else if (type === 'hyper') {
+        player.slashCD = 180; // 3s
+        player.hyperArmor = true;
+    } else if (type === 'blitz') {
+        player.slashCD = 60;
+        player.dashForce = 35;
+        player.invul = 20;
+        const ang = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+        player.dashDir = { x: Math.cos(ang), y: Math.sin(ang) };
+    } else if (type === 'whirl') {
+        player.slashCD = 720; // 12s
+        player.slashActive = 120; // 2s duration
+    }
+}
+
+// --- UPDATE ---
+
+function update() {
+    if (!state.active) return;
+
+    const dt = state.tacActive ? 0.1 : 1;
+    const worldSpeed = state.difficulty * dt;
+
+    // TAC Management
+    if (state.tacActive) {
+        state.tacDuration -= 1;
+        state.tacCharge = (state.tacDuration / 360) * 100;
+        if (state.tacDuration <= 0) {
+            state.tacActive = false;
+            state.tacCharge = 0;
+        }
+    } else {
+        // Floor 5+ cooldown penalty
+        const rechargeRate = state.floor >= 5 ? (100 / (35 * 60)) : (100 / (25 * 60));
+        state.tacCharge = Math.min(100, state.tacCharge + rechargeRate);
+    }
+
+    // Player Movement
+    let mx = 0, my = 0;
+    if (isMobile && joystick.active) {
+        mx = joystick.x; my = joystick.y;
+    } else {
+        if (keys['KeyW']) my -= 1;
+        if (keys['KeyS']) my += 1;
+        if (keys['KeyA']) mx -= 1;
+        if (keys['KeyD']) mx += 1;
+    }
+    
+    if (mx !== 0 || my !== 0) {
+        const mag = Math.sqrt(mx*mx + my*my);
+        player.x += (mx/mag) * player.speed * dt;
+        player.y += (my/mag) * player.speed * dt;
+        player.lastX = mx/mag; player.lastY = my/mag;
+    }
+
+    if (player.dashForce > 0) {
+        player.x += player.dashDir.x * player.dashForce * dt;
+        player.y += player.dashDir.y * player.dashForce * dt;
+        player.dashForce *= 0.85;
+    }
+
+    // Bounds
+    player.x = Math.max(player.r, Math.min(GAME_WIDTH - player.r, player.x));
+    player.y = Math.max(player.r, Math.min(GAME_HEIGHT - player.r, player.y));
+
+    // Dash Recharge (Slow)
+    player.dashCD += 1 * dt;
+    if (player.dashCD > 300 && player.dashCharges < player.dashMax) {
+        player.dashCharges++;
+        player.dashCD = 0;
+    }
+
+    // Combat States
+    if (player.slashActive > 0) player.slashActive -= 1 * dt;
+    if (player.slashCD > 0) player.slashCD -= 1 * dt;
+    if (player.invul > 0) player.invul -= 1 * dt;
+    if (player.slashActive <= 0) player.hyperArmor = false;
+
+    // Slash Collision
+    if (player.slashActive > 0) {
+        const slashRange = player.slashType === 'whirl' ? 80 : 60;
+        const slashAngle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+        
+        enemies.forEach(e => {
+            const dist = Math.hypot(e.x - player.x, e.y - player.y);
+            if (dist < slashRange + 20) {
+                const angleToEnemy = Math.atan2(e.y - player.y, e.x - player.x);
+                const diff = Math.abs(angleToEnemy - slashAngle);
+                
+                if (player.slashType === 'whirl' || diff < Math.PI/2) {
+                    let dmg = 2;
+                    if (player.slashType === 'hyper') dmg = 10;
+                    if (player.slashType === 'blitz') dmg = 15;
+                    e.hp -= dmg * dt;
+                    spawnParticles(e.x, e.y, '#0ff', 1);
+                }
+            }
+        });
+
+        // Bullet Deflection
+        bullets.forEach(b => {
+            const dist = Math.hypot(b.x - player.x, b.y - player.y);
+            if (dist < slashRange) {
+                b.vx *= -1.5; b.vy *= -1.5;
+                b.fromPlayer = true;
+                b.color = '#0ff';
+            }
+        });
+    }
+
+    // Bullet Logic
+    bullets.forEach((b, i) => {
+        b.x += b.vx * worldSpeed;
+        b.y += b.vy * worldSpeed;
+        
+        if (!b.fromPlayer && player.invul <= 0 && Math.hypot(b.x - player.x, b.y - player.y) < player.r + 5) {
+            takeDamage(state.floor >= 5 ? 25 : 15);
+            bullets.splice(i, 1);
+        } else if (b.fromPlayer) {
+            enemies.forEach(e => {
+                if (Math.hypot(b.x - e.x, b.y - e.y) < 30) {
+                    e.hp -= 30;
+                    bullets.splice(i, 1);
+                }
+            });
+        }
+        
+        if (b.x < -50 || b.x > GAME_WIDTH + 50 || b.y < -50 || b.y > GAME_HEIGHT + 50) bullets.splice(i, 1);
+    });
+
+    // Enemy Logic
+    enemies.forEach((e, i) => {
+        if (e.hp <= 0) {
+            spawnParticles(e.x, e.y, '#f0f', 10);
+            enemies.splice(i, 1);
+            return;
+        }
+
+        e.timer += 0.05 * worldSpeed;
+
+        if (e.type === 'PINK_TRIANGLE') {
+            if (Math.sin(e.timer) > 0.9) {
+                for(let j=0; j<8; j++) {
+                    const ang = (j/8) * Math.PI * 2 + e.timer;
+                    bullets.push({ x: e.x, y: e.y, vx: Math.cos(ang)*4, vy: Math.sin(ang)*4, color: '#f0f' });
+                }
+                e.timer = 0;
+            }
+        } else if (e.type === 'STALKER') {
+            const ang = Math.atan2(player.y - e.y, player.x - e.x);
+            e.x += Math.cos(ang) * 2 * worldSpeed;
+            e.y += Math.sin(ang) * 2 * worldSpeed;
+            if (Math.floor(e.timer * 10) % 60 === 0) {
+                bullets.push({ x: e.x, y: e.y, vx: Math.cos(ang)*6, vy: Math.sin(ang)*6, color: '#f40' });
+            }
+        } else if (e.type === 'UNDER_BOSS') {
+            updateBoss(e, worldSpeed);
+        }
+    });
+
+    // Nodes and Exit
+    nodes.forEach(n => {
+        if (n.active && Math.hypot(player.x - n.x, player.y - n.y) < 30) {
+            n.active = false;
+            state.nodesCollected++;
+        }
+    });
+
+    if (state.nodesCollected >= state.nodesNeeded && player.x > GAME_WIDTH - 40) {
+        state.floor++;
+        spawnFloor();
+    }
+
+    // Particles
+    particles.forEach((p, i) => {
+        p.x += p.vx; p.y += p.vy; p.life -= 0.02;
+        if (p.life <= 0) particles.splice(i, 1);
+    });
+
+    updateUI();
+}
+
+function updateBoss(b, speed) {
+    b.timer += 0.02 * speed;
+    const pDist = Math.hypot(player.x - b.x, player.y - b.y);
+    
+    // Phase transitions
+    if (b.hp < b.maxHp * 0.5) b.phase = 1;
+    if (b.hp < b.maxHp * 0.2) b.phase = 2;
+
+    // Attack 1: Circular Spray
+    if (Math.floor(b.timer * 50) % 10 === 0) {
+        const ang = b.timer * 10;
+        bullets.push({ x: b.x, y: b.y, vx: Math.cos(ang)*5, vy: Math.sin(ang)*5, color: '#ff0' });
+        if (b.phase >= 1) {
+            bullets.push({ x: b.x, y: b.y, vx: Math.cos(-ang)*5, vy: Math.sin(-ang)*5, color: '#f0f' });
+        }
+    }
+
+    // Attack 2: Nightmare Blasts (Floor 5 specific)
+    if (state.floor % 5 === 0 && Math.floor(b.timer * 20) % 100 === 0) {
+        for(let i=0; i<20; i++) {
+            const rx = Math.random() * GAME_WIDTH;
+            const ry = Math.random() * GAME_HEIGHT;
+            setTimeout(() => {
+                spawnParticles(rx, ry, '#f00', 5);
+                bullets.push({ x: rx, y: ry, vx: 0, vy: 5, color: '#f00' });
+                bullets.push({ x: rx, y: ry, vx: 0, vy: -5, color: '#f00' });
+            }, 500);
+        }
+    }
+}
+
+function takeDamage(amt) {
+    if (player.invul > 0) return;
+    if (player.hyperArmor) amt *= 0.2;
+    
+    player.hp -= amt;
+    player.invul = 40;
+    state.shake = 10;
+    
+    if (player.hp <= 0) {
+        state.lives--;
+        updateLivesUI();
+        if (state.lives <= 0) {
+            state.active = false;
+            document.getElementById('death-screen').style.display = 'flex';
+        } else {
+            player.hp = 100;
+            player.x = 80;
+            player.y = GAME_HEIGHT/2;
+        }
+    }
+}
+
+// --- RENDERING ---
+
+function draw() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+    
+    if (state.shake > 0) {
+        ctx.translate((Math.random()-0.5)*state.shake, (Math.random()-0.5)*state.shake);
+        state.shake *= 0.9;
+    }
+
+    // Grid
+    ctx.strokeStyle = '#111';
+    for(let i=0; i<GAME_WIDTH; i+=50) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, GAME_HEIGHT); ctx.stroke(); }
+
+    // Exit
+    if (state.nodesCollected >= state.nodesNeeded) {
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
+        ctx.fillRect(GAME_WIDTH - 50, 0, 50, GAME_HEIGHT);
+    }
+
+    // Walls
+    ctx.fillStyle = '#151515';
+    ctx.strokeStyle = '#333';
+    walls.forEach(w => { ctx.fillRect(w.x, w.y, w.w, w.h); ctx.strokeRect(w.x, w.y, w.w, w.h); });
+
+    // Nodes
+    nodes.forEach(n => {
+        if (!n.active) return;
+        ctx.strokeStyle = '#0f0';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(n.x, n.y, 15, 0, Math.PI*2); ctx.stroke();
+    });
+
+    // Enemies
+    enemies.forEach(e => {
+        ctx.fillStyle = e.type === 'PINK_TRIANGLE' ? '#f0f' : '#f40';
+        if (e.type === 'UNDER_BOSS') ctx.fillStyle = '#fff';
+        
+        ctx.beginPath();
+        if (e.type === 'UNDER_BOSS') {
+            ctx.arc(e.x, e.y, 40, 0, Math.PI*2);
+        } else {
+            ctx.moveTo(e.x, e.y-20); ctx.lineTo(e.x+20, e.y+15); ctx.lineTo(e.x-20, e.y+15);
+        }
+        ctx.fill();
+        
+        // Enemy HP
+        ctx.fillStyle = '#222'; ctx.fillRect(e.x-20, e.y-30, 40, 4);
+        ctx.fillStyle = '#0ff'; ctx.fillRect(e.x-20, e.y-30, (e.hp/e.maxHp)*40, 4);
+    });
+
+    // Bullets
+    bullets.forEach(b => {
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI*2); ctx.fill();
+    });
+
+    // Player Slash Visual
+    if (player.slashActive > 0) {
+        const ang = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+        ctx.strokeStyle = player.slashType === 'normal' ? 'rgba(0, 255, 255, 0.5)' : 'rgba(168, 85, 247, 0.5)';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        if (player.slashType === 'whirl') {
+            ctx.arc(player.x, player.y, 80, 0, Math.PI*2);
+        } else {
+            ctx.arc(player.x, player.y, 60, ang - Math.PI/2, ang + Math.PI/2);
+        }
+        ctx.stroke();
+    }
+
+    // Player
+    if (player.invul > 0 && Math.floor(Date.now()/50)%2==0) ctx.globalAlpha = 0.3;
+    ctx.fillStyle = player.hyperArmor ? '#a855f7' : '#0ff';
+    ctx.shadowBlur = 15; ctx.shadowColor = ctx.fillStyle;
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+    // Particles
+    particles.forEach(p => {
+        ctx.globalAlpha = p.life; ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 3, 3);
+    });
+    ctx.globalAlpha = 1;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+// --- UI HELPERS ---
+
+function updateUI() {
+    document.getElementById('hp-bar').style.width = player.hp + '%';
+    document.getElementById('tac-bar').style.width = state.tacCharge + '%';
+    document.getElementById('node-progress').innerText = `NODES: ${state.nodesCollected} / ${state.nodesNeeded}`;
+    document.getElementById('floor-text').innerText = `FLOOR ${state.floor}: ${state.isBossFloor ? 'ANOMALY' : 'STABLE'}`;
+    document.getElementById('dash-status').innerText = `DASH CHARGES: ${player.dashCharges}/3`;
+    
+    // Cooldown overlays
+    document.getElementById('cd-slash').style.height = (player.slashCD / 20 * 100) + '%';
+    document.getElementById('cd-dash').style.height = (player.dashCD / 300 * 100) + '%';
+}
+
+function updateLivesUI() {
+    const container = document.getElementById('lives-container');
+    container.innerHTML = '';
+    for(let i=0; i<3; i++) {
+        const heart = document.createElement('div');
+        heart.className = 'life-heart' + (i >= state.lives ? ' dead-heart' : '');
+        container.appendChild(heart);
+    }
+}
+
+function spawnParticles(x, y, color, count) {
+    for(let i=0; i<count; i++) {
+        particles.push({
+            x, y, vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10,
+            life: 1, color
+        });
+    }
+}
+
+function setupMobileEvents() {
+    const joyBase = document.getElementById('joy-base');
+    const joyKnob = document.getElementById('joy-knob');
+    
+    const handleJoy = (e) => {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const rect = joyBase.getBoundingClientRect();
+        const cx = rect.left + rect.width/2;
+        const cy = rect.top + rect.height/2;
+        const dx = touch.clientX - cx;
+        const dy = touch.clientY - cy;
+        const dist = Math.min(50, Math.hypot(dx, dy));
+        const ang = Math.atan2(dy, dx);
+        
+        joystick.active = true;
+        joystick.x = Math.cos(ang) * (dist/50);
+        joystick.y = Math.sin(ang) * (dist/50);
+        joyKnob.style.transform = `translate(${Math.cos(ang)*dist}px, ${Math.sin(ang)*dist}px)`;
+    };
+
+    joyBase.addEventListener('touchstart', handleJoy);
+    joyBase.addEventListener('touchmove', handleJoy);
+    joyBase.addEventListener('touchend', () => {
+        joystick.active = false;
+        joyKnob.style.transform = 'translate(0,0)';
+    });
+
+    document.getElementById('m-slash').addEventListener('touchstart', (e) => { e.preventDefault(); triggerSlash('normal'); });
+    document.getElementById('m-dash').addEventListener('touchstart', (e) => { e.preventDefault(); triggerDash(); });
+    document.getElementById('m-tac').addEventListener('touchstart', (e) => { e.preventDefault(); handleSpecialInputs('ShiftLeft'); });
+    document.getElementById('m-blitz').addEventListener('touchstart', (e) => { e.preventDefault(); triggerSlash('blitz'); });
+}
+
+function closeSettings() {
+    state.difficulty = parseFloat(document.getElementById('set-diff').value);
+    document.getElementById('settings-modal').style.display = 'none';
+}
+
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+window.onload = init;
+window.addEventListener('resize', resize);
+</script>
+</body>
+</html>
